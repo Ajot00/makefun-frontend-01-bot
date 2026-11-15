@@ -1,5 +1,6 @@
 import{getProfile}from'./api.js';
-import{avatar,date,esc,money}from'./format.js';
+import{esc,money}from'./format.js';
+import{avatar,date}from'./view-format.js';
 export async function renderProfile(app,handle){
  const p=await getProfile(handle),record=p.record||{},solutions=p.solutions||[];
  document.title=`@${p.handle||handle} | Lightboard`;

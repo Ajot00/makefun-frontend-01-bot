@@ -4,7 +4,7 @@ const pending=new Map();
 async function updateCache(url,id,old){
  if(pending.has(id))return pending.get(id);
  const work=(async()=>{
-  const response=await fetch(url,{headers:old?.tag?{'If-None-Match':old.tag}:{}});
+  let response;for(let i=0;i<3;i++){try{response=await fetch(url,{headers:old?.tag?{'If-None-Match':old.tag}:{}});if(response.status<500||i===2)break;}catch(e){if(i===2)throw e;}await new Promise(r=>setTimeout(r,250*(i+1)));}
   if(response.status===304){old.at=Date.now();localStorage.setItem(id,JSON.stringify(old));return old.data;}
   if(!response.ok)throw Error('make.fun answered '+response.status);
   const data=await response.json();localStorage.setItem(id,JSON.stringify({data,tag:response.headers.get('ETag'),at:Date.now()}));return data;
