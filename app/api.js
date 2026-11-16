@@ -1,1 +1,76 @@
-const t=new Map;async function e(e,a,o){if(t.has(a))return t.get(a);const n=(async()=>{let t;for(let a=0;a<3;a++){try{if(t=await fetch(e,{headers:o?.tag?{"If-None-Match":o.tag}:{}}),t.status<500||2===a)break}catch(t){if(2===a)throw t}await new Promise(t=>setTimeout(t,250*(a+1)))}if(304===t.status)return o.at=Date.now(),localStorage.setItem(a,JSON.stringify(o)),o.data;if(!t.ok)throw Error("make.fun answered "+t.status);const n=await t.json();return localStorage.setItem(a,JSON.stringify({data:n,tag:t.headers.get("ETag"),at:Date.now()})),n})().finally(()=>t.delete(a));return t.set(a,n),n}async function a(t,{refresh:a=!1}={}){const o="https://make.fun/api"+t,n=(t=>"lightboard:"+t)(o),r=JSON.parse(localStorage.getItem(n)||"null");if(r&&!a)return Date.now()-r.at>=6e4&&e(o,n,r).catch(()=>{}),r.data;try{return await e(o,n,r)}catch(t){if(r)return r.data;throw t}}export const getBounties=()=>a("/competitions?status=open&activity=times&limit=100");export const getBounty=t=>a("/competitions/"+encodeURIComponent(t)+"?submissions=summary");export const getLeaderboard=t=>a("/competitions/"+encodeURIComponent(t)+"/leaderboard?phase=dev&view=overall&rows=first&ties=ids");export const getProfile=t=>a("/profiles/"+encodeURIComponent(t));
+export const FRESH_MS = 60_000;
+const responseCache = new Map();
+const activeRequests = new Map();
+export const requestStats = { requests: 0, cached: 0, notModified: 0, updated: '' };
+
+function persist(cacheKey, record) {
+  const packed = JSON.stringify(record);
+  if (packed.length < 3_000_000) {
+    try { localStorage.setItem(cacheKey, packed); } catch { /* Large public lists stay in memory. */ }
+  }
+}
+
+async function fetchWithRetry(url, cacheKey, previous) {
+  const headers = previous?.etag ? { 'If-None-Match': previous.etag } : {};
+  let response;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      requestStats.requests++;
+      response = await fetch(url, { headers });
+      if (response.status < 500 || attempt === 4) break;
+    } catch (error) {
+      if (attempt === 4) throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 350 * (attempt + 1)));
+  }
+  if (response.status === 304 && previous) {
+    requestStats.notModified++;
+    previous.savedAt = Date.now();
+    persist(cacheKey, previous);
+    requestStats.updated = new Date().toISOString().slice(11, 19);
+    return previous.data;
+  }
+  if (!response.ok) throw new Error(`make.fun answered ${response.status}`);
+  const data = await response.json();
+  const record = { data, etag: response.headers.get('ETag'), savedAt: Date.now() };
+  responseCache.set(cacheKey, record);
+  persist(cacheKey, record);
+  requestStats.updated = new Date().toISOString().slice(11, 19);
+  return data;
+}
+
+export function cacheWithEtag(path, { refresh = false } = {}) {
+  const url = `https://make.fun/api${path}`;
+  const cacheKey = `lightboard:${url}`;
+  const memory = responseCache.get(cacheKey);
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch { saved = null; }
+  const previous = memory || saved;
+  if (previous && !refresh) {
+    requestStats.cached++;
+    if (Date.now() - previous.savedAt >= FRESH_MS) fetchWithRetry(url, cacheKey, previous).catch(() => {});
+    else if (!memory) responseCache.set(cacheKey, previous);
+    return Promise.resolve(previous.data);
+  }
+  if (activeRequests.has(cacheKey)) return activeRequests.get(cacheKey);
+  const pending = fetchWithRetry(url, cacheKey, previous).finally(() => activeRequests.delete(cacheKey));
+  activeRequests.set(cacheKey, pending);
+  return pending;
+}
+
+export async function getBounties(status) {
+  const items = [], seen = new Set();
+  let cursor = '';
+  do {
+    const page = await cacheWithEtag(`/competitions?status=${encodeURIComponent(status)}&activity=times&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    items.push(...(page.items || []));
+    cursor = page.next_cursor || '';
+    if (cursor && seen.has(cursor)) break;
+    if (cursor) seen.add(cursor);
+  } while (cursor);
+  return { items };
+}
+export const getBounty = slug => cacheWithEtag(`/competitions/${encodeURIComponent(slug)}?submissions=summary`);
+export const getRecentSubmissions = (slug, cursor = '') => cacheWithEtag(`/competitions/${encodeURIComponent(slug)}/submissions?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+export const getLeaderboard = slug => cacheWithEtag(`/competitions/${encodeURIComponent(slug)}/leaderboard?phase=dev&view=overall&rows=all&ties=ids`);
+export const getProfile = handle => cacheWithEtag(`/profiles/${encodeURIComponent(handle)}`);

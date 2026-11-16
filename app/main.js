@@ -1,7 +1,28 @@
-import{getBounties as G}from"./api.js";import{esc as E,money as M,timeLeft as T,list as L}from"./format.js";
-const app=document.querySelector("#app");let rows=[],load;
-const mark='<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M18 65V40a24 24 0 0 1 48 0v19q11-2 13 7t-9 13h-7q-3 10-14 5-9 7-18 0-11 5-15-5h-3Q9 78 12 69q1-4 6-4Z" fill="#fff" stroke="#09090b" stroke-width="4" stroke-linejoin="round"/><path d="m34 39 3-5 3 5-3 5zm17 0 3-5 3 5-3 5z" fill="#09090b"/><circle cx="75" cy="39" r="14" fill="#ec2582" stroke="#09090b" stroke-width="4"/><path d="m75 29 3 6 7 1-5 5 1 7-6-4-6 3 2-7-5-4 7-1z" fill="#fff"/><circle cx="75" cy="63" r="8" fill="#fff" stroke="#09090b" stroke-width="3"/></svg>';
-function board(){let now=Date.now(),input=document.querySelector("#find"),s=input?.value.toLowerCase()||"",cursor=input?.selectionStart||0,f=document.querySelector("[aria-pressed=true]")?.dataset.fee||"all",live=rows.filter(x=>new Date(x.deadline)>now),sum=live.reduce((n,x)=>n+Number(L(x,"potUsd","pot_usd","rewardAmount")||0),0),shown=rows.filter(x=>(!s||`${x.title} ${x.slug}`.toLowerCase().includes(s))&&(f==="all"||(f==="free"?!Number(L(x,"entryFeeUsd","entry_fee_usd")):!!Number(L(x,"entryFeeUsd","entry_fee_usd"))))).sort((a,b)=>(new Date(a.deadline)<=now)-(new Date(b.deadline)<=now)||new Date(a.deadline)-new Date(b.deadline));app.innerHTML=`<div class="ed"><div class="ed-mark">${mark}</div><div class="ed-copy"><p class="fo">MAKE.FUN FIELD NOTES <i>№ 01</i></p><h1>Bounties<br><em>in motion.</em></h1><p class="dk">A live index of open competitions, their growing pots, and the time left to enter.</p></div><div class="ed-side"><b>${live.length.toString().padStart(2,"0")}</b><span>taking<br>entries</span><hr><b>${M(sum)}</b><span>live prize<br>value</span><small>UPDATED <time id="clock"></time> UTC</small></div></div><div class="it"><label for="find">INDEX / <input id="find" type="search" placeholder="Find a competition" value="${E(s)}"></label><div class="fl">${["all","free","paid"].map(x=>`<button data-fee="${x}" aria-pressed="${x===f}">${x.toUpperCase()}</button>`).join("")}</div><span>${shown.length} LISTED</span></div><div class="ih"><span>NO. / COMPETITION</span><span>LIVE POT</span><span>ENTRY</span><span>TIME LEFT</span><span>ENTRIES</span></div><div class="il">${shown.map((x,i)=>{let fee=Number(L(x,"entryFeeUsd","entry_fee_usd")||0),deadline=x.deadline;return`<article class="ir ${x.slug==="makefun-frontend-01"?"current":""}"><b class="sn">${String(i+1).padStart(2,"0")}</b><div class="wk"><small>${E(x.category||x.harness_kind||"OPEN CALL")} <i>·</i> ${new Date(x.publishedAt||x.startsAt||Date.now()).toLocaleDateString("en-US",{day:"2-digit",month:"short",timeZone:"UTC"}).toUpperCase()}</small><a href="#/bounty/${encodeURIComponent(x.slug)}">${E(x.title)}</a></div><strong class="pt">${M(Number(L(x,"potUsd","pot_usd","rewardAmount")||0))}</strong><span class="ef">${fee?M(fee):"FREE"}</span><span class="rm" data-date="${E(deadline)}">${T(deadline)}</span><span class="en">${Number(L(x,"submissionCount","submission_count")||0).toLocaleString()}</span></article>`}).join("")||"<p class=empty>No competitions match this index.</p>"}</div><footer class="co"><span>PUBLIC DATA · ${rows.length} COMPETITIONS</span><nav><a href="#/bounty/makefun-frontend-01">FEATURED BOUNTY</a><a href="#/bounty/threejs-fps-02/leaderboard">TOP BUILDERS</a><a href="#/profile/nightshift-labs">PROFILE</a></nav></footer>`;let search=document.querySelector("#find");search.oninput=()=>board();if(s){search.focus();search.setSelectionRange(cursor,cursor)}document.querySelectorAll("[data-fee]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-fee]").forEach(z=>z.setAttribute("aria-pressed","false"));b.setAttribute("aria-pressed","true");board()});tick()}
-function tick(){let n=new Date;document.querySelector("#clock")?.replaceChildren(document.createTextNode(n.toISOString().slice(11,19)));document.querySelectorAll("[data-date]").forEach(x=>x.textContent=T(x.dataset.date))}
-async function route(){window.__shotReady=false;app.innerHTML="<p class=loading>Opening live index…</p>";try{let h=decodeURIComponent(location.hash||"#/"),m;if(m=h.match(/^#\/bounty\/([^/]+)\/leaderboard(?:\/page\/\d+)?$/)){await loadViews();await(await import("./views-leaderboard.js")).renderLeaderboard(app,m[1])}else if(m=h.match(/^#\/bounty\/([^/]+)$/)){await loadViews();await(await import("./views-bounty.js")).renderBounty(app,m[1])}else if(m=h.match(/^#\/profile\/([^/]+)$/)){await loadViews();await(await import("./views-profile.js")).renderProfile(app,m[1])}else{let d=await G();rows=(d?.data??d).items||[];board();clearInterval(window.lightTick);window.lightTick=setInterval(tick,1000)}document.title="Lightboard — make.fun"}catch(e){app.innerHTML=`<p class=error>${E(e.message)} · <a href="#/">Return to index</a></p>`}window.scrollTo(0,0);setTimeout(()=>window.__shotReady=true,600)}
-function loadViews(){return Promise.all(["views.css","view-overrides.css"].map(h=>new Promise((ok,bad)=>{let l=document.createElement("link");l.rel="stylesheet";l.href=h;l.onload=ok;l.onerror=bad;document.head.append(l)})))}addEventListener("hashchange",route);route();
+const app = document.querySelector('#app');
+const BOUNTY_ROUTE = /^#\/bounty\/([^/]+)$/;
+const LEADERBOARD_ROUTE = /^#\/bounty\/([^/]+)\/leaderboard(?:\/page\/(\d+))?$/;
+let view;
+
+async function route() {
+  window.__shotReady = false;
+  clearInterval(window.lightTick);
+  const hash = decodeURIComponent(location.hash || '#/');
+  app.innerHTML = '<p class="loading">Opening live make.fun data…</p>';
+  try {
+    view ||= await import('./views-board.js');
+    const leaderboard = hash.match(LEADERBOARD_ROUTE);
+    const bounty = hash.match(BOUNTY_ROUTE);
+    if (leaderboard) await view.showLeaderboard(app, leaderboard[1], Number(leaderboard[2]) || 1);
+    else if (bounty) await view.showBounty(app, bounty[1]);
+    else if (/^#\/profile\/[^/]+$/.test(hash)) await view.showProfile(app, hash.slice('#/profile/'.length));
+    else if (hash === '#/' || hash === '#') await view.showBoard(app);
+    else view.showNotFound(app);
+  } catch (error) {
+    app.innerHTML = `<p class="error">${String(error.message)} <a href="#/">Return to board</a></p>`;
+  }
+  window.scrollTo(0, 0);
+  window.__shotReady = true;
+}
+
+addEventListener('hashchange', route);
+route();
