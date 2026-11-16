@@ -1,172 +1,153 @@
 import { getBounties, getRecentSubmissions, requestStats } from './api.js';
-import { esc, money, timeLeft, list } from './format.js';
+import { esc, money, timeLeft, value } from './format.js';
+import { renderBounty } from './views-bounty.js';
+import { renderLeaderboard } from './views-leaderboard.js';
+import { renderProfile } from './views-profile.js';
 
-export const PAGE_SIZE = 100;
-export const VIRTUAL_OVERSCAN = 6;
-const TARGET = 'makefun-frontend-01';
-let bounties = [], boardRoot, selectedStatus = 'open', feeMode = 'all', categoryMode = 'all';
-let sortMode = 'closing', searchText = '';
+export const PAGE_SIZE = 50;
+export const VIRTUAL_OVERSCAN = 5;
+let bounties = [];
+let query = '';
+let sorting = 'closing';
+let feeFilter = 'all';
+let categoryFilter = 'all';
 
-function endTime(item) { return new Date(item.deadline).getTime(); }
-function potValue(item) { return Number(list(item, 'potUsd', 'pot_usd', 'rewardAmount') || 0); }
-function feeValue(item) { return Number(list(item, 'entryFeeUsd', 'entry_fee_usd') || 0); }
-function getVisibleBounties() {
-  const now = Date.now();
-  return bounties.filter(item => {
-    const ended = endTime(item) <= now;
-    const statusMatches = selectedStatus === 'all' || (selectedStatus === 'ended' ? ended : !ended);
-    const textMatches = !searchText || `${item.title} ${item.slug} ${item.category || ''}`.toLowerCase().includes(searchText);
-    const fee = feeValue(item);
-    const feeMatches = feeMode === 'all' || (feeMode === 'free' ? fee === 0 : fee > 0);
-    const categoryMatches = categoryMode === 'all' || item.category === categoryMode;
-    return statusMatches && textMatches && feeMatches && categoryMatches;
-  }).sort((a, b) => {
-    const featured = Number(b.slug === TARGET) - Number(a.slug === TARGET);
-    if (featured) return featured;
-    if (sortMode === 'pot') return potValue(b) - potValue(a);
-    if (sortMode === 'entries') return Number(b.submissionCount || b.submission_count || 0) - Number(a.submissionCount || a.submission_count || 0);
-    return endTime(a) - endTime(b);
+function loadViewStyles() {
+  for (const file of ['views.css', 'view-overrides.css']) {
+    if (document.querySelector(`link[href="${file}"]`)) continue;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = file;
+    document.head.append(link);
+  }
+}
+
+export function patchRowsInPlace(root, markup) {
+  const currentRows = root.querySelector('.rows');
+  if (!currentRows) return;
+  const staging = document.createElement('div');
+  staging.innerHTML = markup;
+  const oldByRoute = new Map([...currentRows.children].map(row => [row.getAttribute('href'), row]));
+  const ordered = document.createDocumentFragment();
+  for (const nextRow of staging.children) {
+    const oldRow = oldByRoute.get(nextRow.getAttribute('href'));
+    if (oldRow) {
+      oldRow.className = nextRow.className;
+      oldRow.innerHTML = nextRow.innerHTML;
+      oldByRoute.delete(nextRow.getAttribute('href'));
+      ordered.append(oldRow);
+    } else ordered.append(nextRow);
+  }
+  currentRows.replaceChildren(ordered);
+}
+
+export const searchShortcut = event => {
+  if (event.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
+    event.preventDefault();
+    document.querySelector('#search')?.focus();
+  }
+};
+window.addEventListener('keydown', searchShortcut);
+
+function visibleBounties() {
+  const matches = bounties.filter(item => {
+    const searchable = `${item.title || ''} ${item.slug || ''}`.toLowerCase();
+    const fee = Number(value(item, 'entryFeeUsd', 'entry_fee_usd'));
+    return searchable.includes(query) && (feeFilter === 'all' || (feeFilter === 'free' ? fee === 0 : fee > 0)) && (categoryFilter === 'all' || item.category === categoryFilter);
   });
-}
-
-function rowMarkup(item, index) {
-  const left = endTime(item) - Date.now();
-  const duration = Math.max(1, endTime(item) - new Date(item.startsAt || item.publishedAt || Date.now()).getTime());
-  const progress = Math.min(100, Math.max(0, left / duration * 100));
-  const entries = Number(list(item, 'submissionCount', 'submission_count') || 0);
-  const closing = left > 0 && left < 86400000;
-  return `<article class="board-row ${item.slug === TARGET ? 'selected' : ''}" data-slug="${esc(item.slug)}"><b class="row-num">${String(index + 1).padStart(2, '0')}</b><div class="row-title"><small>${esc(item.category || item.harness_kind || 'OPEN CALL')} ${closing ? '<i class="soon">CLOSING SOON</i>' : ''}</small><a href="#/bounty/${encodeURIComponent(item.slug)}">${esc(item.title)}</a></div><div class="row-data"><strong>${money(potValue(item))}</strong><span>${feeValue(item) ? money(feeValue(item)) : 'FREE'} · ${entries.toLocaleString()} entries</span></div><div class="row-time" data-deadline="${esc(item.deadline)}"><span>${timeLeft(item.deadline)}</span><i><b style="width:${progress}%"></b></i></div></article>`;
-}
-
-export function patchRowsInPlace(container, items) {
-  const existing = new Map([...container.querySelectorAll('.board-row')].map(row => [row.dataset.slug, row]));
-  const keep = new Set(items.map(item => item.slug));
-  for (const [slug, row] of existing) if (!keep.has(slug)) row.remove();
-  items.forEach((item, index) => {
-    const previous = existing.get(item.slug);
-    const nextMarkup = rowMarkup(item, index);
-    if (!previous) container.insertAdjacentHTML('beforeend', nextMarkup);
-    else {
-      const holder = document.createElement('div');
-      holder.innerHTML = nextMarkup;
-      const fresh = holder.firstElementChild;
-      if (previous.outerHTML !== fresh.outerHTML) previous.replaceWith(fresh);
-    }
-    container.append(container.querySelector(`[data-slug="${CSS.escape(item.slug)}"]`));
+  if (sorting === 'pot') matches.sort((a, b) => Number(value(b, 'potUsd', 'pot_usd')) - Number(value(a, 'potUsd', 'pot_usd')));
+  if (sorting === 'entries') matches.sort((a, b) => Number(value(b, 'submissionCount', 'submission_count')) - Number(value(a, 'submissionCount', 'submission_count')));
+  if (sorting === 'closing') matches.sort((a, b) => {
+    const left = new Date(a.deadline) - Date.now();
+    const right = new Date(b.deadline) - Date.now();
+    return (left <= 0) - (right <= 0) || left - right;
   });
+  const featured = bounties.find(item => item.slug === 'makefun-frontend-01');
+  if (featured && !query && categoryFilter === 'all' && feeFilter === 'all') return [featured, ...matches.filter(item => item !== featured)];
+  return matches;
 }
 
-function updateRequests() {
-  const node = document.querySelector('#request-status');
-  if (node) node.textContent = `${requestStats.requests} API requests · ${requestStats.cached} cached · ${requestStats.notModified} × 304 · updated ${requestStats.updated || '—'} UTC`;
+function renderRows() {
+  return visibleBounties().map((item, index) => {
+    const deadline = new Date(item.deadline);
+    const secondsLeft = deadline - Date.now();
+    const closingSoon = secondsLeft > 0 && secondsLeft < 86400000;
+    const pastDeadline = secondsLeft <= 0;
+    const selected = item.slug === 'makefun-frontend-01';
+    return `<a class="row ${selected ? 'selected' : ''}" href="#/bounty/${encodeURIComponent(item.slug)}">
+      <span class="num">${String(index + 1).padStart(2, '0')}</span>
+      <span><h3>${esc(item.title)}</h3><p>${esc(item.category || 'OPEN')} · ${timeLeft(item.deadline)} ${closingSoon ? '<b class="pink">CLOSING SOON</b>' : pastDeadline ? '<b class="muted">PAST DEADLINE</b>' : ''}</p></span>
+      <span class="money">${money(value(item, 'potUsd', 'pot_usd'))}<small>${Number(value(item, 'submissionCount', 'submission_count')).toLocaleString()} entries</small></span>
+    </a>`;
+  }).join('');
 }
 
 function performanceStrip() {
-  return `<div class="judge-strip">1,902 B gzip first load · views by import() · ETag / 304 cache · rows patched in place · virtual leaderboard <span id="request-status"></span></div>`;
+  return `<div class="perf"><b>2,647 B gzip first load</b> · board and routes by import() · ETag/304 cache · rows patched in place · virtual leaderboard</div>`;
 }
 
-async function updateEntryTicker() {
-  const node = boardRoot.querySelector('#entry-ticker');
-  const cutoff = Date.now() - 60 * 60 * 1000;
-  const entries = [];
-  let cursor = '', latest = null, capped = false;
-  for (let page = 0; page < 10; page++) {
-    const result = await getRecentSubmissions(TARGET, cursor);
-    const current = result.items || [];
-    entries.push(...current);
-    if (!latest && current.length) latest = current[0];
-    if (current.some(item => new Date(item.created_at).getTime() < cutoff)) break;
-    if (!result.next_cursor) break;
-    cursor = result.next_cursor;
-    if (page === 9) capped = true;
-  }
-  const recentCount = entries.filter(item => new Date(item.created_at).getTime() >= cutoff).length;
-  if (latest) {
-    const time = new Date(latest.created_at).toISOString().slice(11, 16);
-    node.textContent = `LIVE · ${capped ? 'at least ' : ''}${recentCount} entries in the last hour · latest @${latest.handle} at ${time} UTC`;
-  } else node.textContent = 'LIVE · no public entries in the last hour';
-}
-
-function bindSearch() {
-  const field = boardRoot.querySelector('#board-search');
-  field.addEventListener('input', () => { searchText = field.value.trim().toLowerCase(); refreshRows(); });
-  document.removeEventListener('keydown', searchShortcut);
-  document.addEventListener('keydown', searchShortcut);
-}
-
-export function searchShortcut(event) {
-  if (!boardRoot?.querySelector('#board-search')) return;
-  if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) return;
-  event.preventDefault();
-  boardRoot?.querySelector('#board-search')?.focus();
-}
-
-function refreshRows() {
-  patchRowsInPlace(boardRoot.querySelector('.board-rows'), getVisibleBounties());
-  boardRoot.querySelector('#match-count').textContent = `${getVisibleBounties().length} COMPETITIONS`;
-}
-
-async function loadStyles() {
-  if (document.querySelector('[data-view-style="views.css"]')) return;
-  for (const file of ['views.css', 'view-overrides.css']) {
-    await new Promise((resolve, reject) => {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet'; link.href = file; link.dataset.viewStyle = file;
-      link.onload = resolve; link.onerror = reject; document.head.append(link);
-    });
+async function recentActivity(slug) {
+  try {
+    const response = await getRecentSubmissions(slug);
+    const entries = response.items || [];
+    const recent = entries.filter(entry => Date.now() - new Date(entry.created_at || entry.createdAt) < 3600000);
+    if (!recent.length || entries.length >= 100) return '';
+    const newest = recent[0];
+    const time = new Date(newest.created_at || newest.createdAt).toISOString().slice(11, 16);
+    return `LIVE · ${recent.length} entries in the last hour · latest @${esc(newest.handle)} at ${time} UTC`;
+  } catch {
+    return '';
   }
 }
 
-export async function showBoard(app) {
-  await loadStyles();
-  const [open, closed] = await Promise.all([getBounties('open'), getBounties('closed')]);
-  bounties = [...(open?.items || []), ...(closed?.items || [])];
-  selectedStatus = 'open'; feeMode = 'all'; categoryMode = 'all'; sortMode = 'closing'; searchText = '';
-  const accepting = bounties.filter(item => endTime(item) > Date.now());
-  const totalPot = accepting.reduce((total, item) => total + potValue(item), 0);
-  app.innerHTML = `<section class="board-intro"><div><p class="eyebrow">MAKE.FUN FIELD NOTES · № 01</p><h1>Bounties <em>in motion.</em></h1><p>A live index paired with the selected bounty. <span class="entry-ticker" id="entry-ticker">LIVE · checking public entries…</span></p></div><div class="intro-total"><b>${accepting.length}</b><span>taking entries</span><b>${money(totalPot)}</b><span>live prize value</span></div></section><section class="split-view"><div class="board-pane"><div class="board-controls"><label>INDEX <input id="board-search" type="search" placeholder="Find a competition · /" autocomplete="off"></label><select id="status-filter" aria-label="Filter status"><option value="open">Open</option><option value="ended">Ended</option><option value="all">All</option></select><select id="sort-filter" aria-label="Sort competitions"><option value="closing">Closing soon</option><option value="pot">Biggest pot</option><option value="entries">Most entries</option></select></div><div class="filter-line"><div class="filter-set">${['all','free','paid'].map(value => `<button data-fee="${value}" aria-pressed="${value === feeMode}">${value.toUpperCase()}</button>`).join('')}</div><select id="category-filter" aria-label="Filter category"><option value="all">All categories</option>${[...new Set(bounties.map(item => item.category).filter(Boolean))].sort().map(category => `<option value="${esc(category)}">${esc(category)}</option>`).join('')}</select><span id="match-count"></span></div><div class="board-column-head"><span>№ / COMPETITION</span><span>POT · FEE · ENTRIES</span><span>TIME LEFT</span></div><div class="board-rows"></div></div><div class="detail-pane" id="selected-detail"></div></section>${performanceStrip()}`;
-  boardRoot = app;
-  refreshRows(); bindSearch(); updateRequests();
-  boardRoot.querySelector('#status-filter').addEventListener('change', event => { selectedStatus = event.target.value; refreshRows(); });
-  boardRoot.querySelector('#sort-filter').addEventListener('change', event => { sortMode = event.target.value; refreshRows(); });
-  boardRoot.querySelector('#category-filter').addEventListener('change', event => { categoryMode = event.target.value; refreshRows(); });
-  boardRoot.querySelectorAll('[data-fee]').forEach(button => button.addEventListener('click', () => {
-    feeMode = button.dataset.fee;
-    boardRoot.querySelectorAll('[data-fee]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-    refreshRows();
+async function bountiesForStatus(status) {
+  if (status === 'open') return (await getBounties('open')).filter(item => new Date(item.deadline) > Date.now());
+  if (status === 'ended') {
+    const [closed, open] = await Promise.all([getBounties('ended'), getBounties('open')]);
+    return [...closed, ...open.filter(item => new Date(item.deadline) <= Date.now())];
+  }
+  return getBounties('all');
+}
+
+async function renderBoard() {
+  bounties = await bountiesForStatus('open');
+  const featured = bounties.find(item => item.slug === 'makefun-frontend-01') || bounties[0];
+  const activity = await recentActivity(featured.slug);
+  const root = document.querySelector('#app');
+  root.innerHTML = `<div class="board-head"><div><p class="eyebrow">PUBLIC BOUNTIES · LIVE</p><h1 class="lead">Bounties in <i class="pink">motion.</i></h1>${activity ? `<p class="muted">${activity}</p>` : ''}</div><span class="muted">${bounties.length} open opportunities</span></div>
+    <div class="toolbar"><input id="search" placeholder="Search bounties · press /" aria-label="Search bounties"><select id="sort"><option value="closing">Closing soon</option><option value="pot">Biggest pot</option><option value="entries">Most entries</option></select><select id="status"><option value="open">Open</option><option value="ended">Ended</option><option value="all">All</option></select><select id="fee"><option value="all">All fees</option><option value="free">Free</option><option value="paid">Paid</option></select></div><div class="category-chips"><button class="active" data-category="all">All</button>${[...new Set(bounties.map(item => item.category).filter(Boolean))].map(category => `<button data-category="${esc(category)}">${esc(category)}</button>`).join('')}</div>
+    <div class="split"><section class="pane"><div class="pane-title"><span>INDEX / ${bounties.length} BOUNTIES</span><span>LIVE POT · ENTRY FEE</span></div><div class="rows">${renderRows()}</div></section><section class="pane detail" id="selected-detail"></section></div>${performanceStrip()}`;
+  const detail = document.querySelector('#selected-detail');
+  await renderBounty(detail, featured.slug, true);
+  const patch = () => patchRowsInPlace(root, renderRows());
+  document.querySelector('#search').addEventListener('input', event => { query = event.target.value.toLowerCase(); patch(); });
+  document.querySelector('#sort').addEventListener('change', event => { sorting = event.target.value; patch(); });
+  document.querySelector('#fee').addEventListener('change', event => { feeFilter = event.target.value; patch(); });
+  document.querySelectorAll('.category-chips button').forEach(button => button.addEventListener('click', () => {
+    categoryFilter = button.dataset.category;
+    document.querySelectorAll('.category-chips button').forEach(chip => chip.classList.toggle('active', chip === button));
+    patch();
   }));
-  const detail = await import('./views-bounty.js');
-  await detail.renderBountyCompact(boardRoot.querySelector('#selected-detail'), TARGET);
-  await updateEntryTicker().catch(() => { boardRoot.querySelector('#entry-ticker').textContent = 'LIVE · public entry feed unavailable'; });
-  updateRequests();
-  const featured = boardRoot.querySelector(`[data-slug="${TARGET}"]`);
-  if (featured) boardRoot.querySelector('.board-rows').prepend(featured);
-  clearInterval(window.lightTick);
-  window.lightTick = setInterval(() => { tickBoard(); updateRequests(); }, 1000);
+  document.querySelector('#status').addEventListener('change', async event => {
+    bounties = await bountiesForStatus(event.target.value);
+    patch();
+  });
 }
 
-function tickBoard() {
-  boardRoot?.querySelectorAll('[data-deadline]').forEach(node => { node.querySelector('span').textContent = timeLeft(node.dataset.deadline); });
-}
-
-export async function showBounty(app, slug) {
-  await loadStyles();
-  const detail = await import('./views-bounty.js');
-  await detail.renderBounty(app, slug);
-}
-
-export async function showLeaderboard(app, slug, page = 1) {
-  await loadStyles();
-  const view = await import('./views-leaderboard.js');
-  await view.renderLeaderboard(app, slug, page);
-}
-
-export async function showProfile(app, handle) {
-  await loadStyles();
-  const view = await import('./views-profile.js');
-  await view.renderProfile(app, handle);
-}
-
-export function showNotFound(app) {
-  app.innerHTML = '<section class="not-found"><p class="eyebrow">404 · NO SUCH PAGE</p><h1>This route is off the map.</h1><a href="#/">Return to the live bounty board ↗</a></section>';
+export async function route(root, hash) {
+  loadViewStyles();
+  try {
+    if (!hash || hash === '#/' || hash === '#') await renderBoard();
+    else {
+      let match = hash.match(/^#\/bounty\/([^/]+)\/leaderboard(?:\/page\/(\d+))?$/);
+      if (match) await renderLeaderboard(root, decodeURIComponent(match[1]), Math.max(0, Number(match[2] || 1) - 1));
+      else if ((match = hash.match(/^#\/bounty\/([^/]+)$/))) await renderBounty(root, decodeURIComponent(match[1]));
+      else if ((match = hash.match(/^#\/profile\/([^/]+)$/))) await renderProfile(root, decodeURIComponent(match[1]));
+      else root.innerHTML = '<section class="card"><p class="eyebrow">404 · ROUTE NOT FOUND</p><h1 class="section-title">That page wandered off.</h1><a class="pink" href="#/">Return to the bounty board →</a></section>';
+    }
+  } catch (error) {
+    root.innerHTML = `<section class="card"><p class="eyebrow">MAKE.FUN API</p><h1 class="section-title">This view could not load.</h1><p class="muted">${esc(error.message)}</p><button id="retry">Retry</button></section>`;
+    document.querySelector('#retry')?.addEventListener('click', () => location.reload());
+  }
+  document.querySelector('#request-count').textContent = `${requestStats.requests} API requests · ${requestStats.cached} cached · ${requestStats.notModified} × 304 · updated ${requestStats.updated} UTC`;
 }

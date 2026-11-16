@@ -1,1 +1,4 @@
-export const esc=e=>String(e??"").replace(/[&<>"']/g,e=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[e]));export const money=e=>Number(e||0).toLocaleString("en-US",{style:"currency",currency:"USD",minimumFractionDigits:Number(e)%1?2:0});export const timeLeft=e=>{let t=new Date(e).getTime()-Date.now();if(t<=0)return"Ended";let d=Math.floor(t/864e5),h=Math.floor(t%864e5/36e5),m=Math.floor(t%36e5/6e4),s=Math.floor(t%6e4/1e3);return d?`${d}d ${h}h ${m}m ${s}s`:`${h}h ${m}m ${s}s`};export const list=(e,...t)=>t.reduce((t,o)=>t??e?.[o],void 0);
+export const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+export const money=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(Number(n)||0);
+export const timeLeft=d=>{const s=Math.max(0,Math.floor((new Date(d)-Date.now())/1000));return`${Math.floor(s/3600)}h ${Math.floor(s%3600/60)}m ${s%60}s`};
+export const value=(o,...keys)=>{for(const k of keys)if(o?.[k]!=null)return o[k];return 0};

@@ -1,3 +1,3 @@
 import{esc}from'./format.js';
-export const date=v=>v?new Date(v).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}):'—';
-export const avatar=(url,name='Builder')=>{const src=String(url||''),safe=src.startsWith('/api/')?'https://make.fun'+src:src.startsWith('https://make.fun/')?src:'';return safe?'<img crossorigin="anonymous" class="avatar" src="'+esc(safe)+'" alt="'+esc(name)+'">':'<span class="avatar initials">'+esc(String(name||'B').slice(0,1).toUpperCase())+'</span>';};
+export function date(v){if(!v)return'—';return new Intl.DateTimeFormat('en',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'UTC',timeZoneName:'short'}).format(new Date(v))}
+export function avatar(src,name){const image=src?.startsWith('/')?`https://make.fun${src}`:src;return image?`<img class="avatar" crossorigin="anonymous" src="${esc(image)}" alt="">`:`<span class="avatar">${esc(String(name||'?').slice(0,1))}</span>`}
