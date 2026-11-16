@@ -1,153 +1,21 @@
-import { getBounties, getRecentSubmissions, requestStats } from './api.js';
-import { esc, money, timeLeft, value } from './format.js';
-import { renderBounty } from './views-bounty.js';
-import { renderLeaderboard } from './views-leaderboard.js';
-import { renderProfile } from './views-profile.js';
-
-export const PAGE_SIZE = 50;
-export const VIRTUAL_OVERSCAN = 5;
-let bounties = [];
-let query = '';
-let sorting = 'closing';
-let feeFilter = 'all';
-let categoryFilter = 'all';
-
-function loadViewStyles() {
-  for (const file of ['views.css', 'view-overrides.css']) {
-    if (document.querySelector(`link[href="${file}"]`)) continue;
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = file;
-    document.head.append(link);
-  }
-}
-
-export function patchRowsInPlace(root, markup) {
-  const currentRows = root.querySelector('.rows');
-  if (!currentRows) return;
-  const staging = document.createElement('div');
-  staging.innerHTML = markup;
-  const oldByRoute = new Map([...currentRows.children].map(row => [row.getAttribute('href'), row]));
-  const ordered = document.createDocumentFragment();
-  for (const nextRow of staging.children) {
-    const oldRow = oldByRoute.get(nextRow.getAttribute('href'));
-    if (oldRow) {
-      oldRow.className = nextRow.className;
-      oldRow.innerHTML = nextRow.innerHTML;
-      oldByRoute.delete(nextRow.getAttribute('href'));
-      ordered.append(oldRow);
-    } else ordered.append(nextRow);
-  }
-  currentRows.replaceChildren(ordered);
-}
-
-export const searchShortcut = event => {
-  if (event.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
-    event.preventDefault();
-    document.querySelector('#search')?.focus();
-  }
-};
-window.addEventListener('keydown', searchShortcut);
-
-function visibleBounties() {
-  const matches = bounties.filter(item => {
-    const searchable = `${item.title || ''} ${item.slug || ''}`.toLowerCase();
-    const fee = Number(value(item, 'entryFeeUsd', 'entry_fee_usd'));
-    return searchable.includes(query) && (feeFilter === 'all' || (feeFilter === 'free' ? fee === 0 : fee > 0)) && (categoryFilter === 'all' || item.category === categoryFilter);
-  });
-  if (sorting === 'pot') matches.sort((a, b) => Number(value(b, 'potUsd', 'pot_usd')) - Number(value(a, 'potUsd', 'pot_usd')));
-  if (sorting === 'entries') matches.sort((a, b) => Number(value(b, 'submissionCount', 'submission_count')) - Number(value(a, 'submissionCount', 'submission_count')));
-  if (sorting === 'closing') matches.sort((a, b) => {
-    const left = new Date(a.deadline) - Date.now();
-    const right = new Date(b.deadline) - Date.now();
-    return (left <= 0) - (right <= 0) || left - right;
-  });
-  const featured = bounties.find(item => item.slug === 'makefun-frontend-01');
-  if (featured && !query && categoryFilter === 'all' && feeFilter === 'all') return [featured, ...matches.filter(item => item !== featured)];
-  return matches;
-}
-
-function renderRows() {
-  return visibleBounties().map((item, index) => {
-    const deadline = new Date(item.deadline);
-    const secondsLeft = deadline - Date.now();
-    const closingSoon = secondsLeft > 0 && secondsLeft < 86400000;
-    const pastDeadline = secondsLeft <= 0;
-    const selected = item.slug === 'makefun-frontend-01';
-    return `<a class="row ${selected ? 'selected' : ''}" href="#/bounty/${encodeURIComponent(item.slug)}">
-      <span class="num">${String(index + 1).padStart(2, '0')}</span>
-      <span><h3>${esc(item.title)}</h3><p>${esc(item.category || 'OPEN')} · ${timeLeft(item.deadline)} ${closingSoon ? '<b class="pink">CLOSING SOON</b>' : pastDeadline ? '<b class="muted">PAST DEADLINE</b>' : ''}</p></span>
-      <span class="money">${money(value(item, 'potUsd', 'pot_usd'))}<small>${Number(value(item, 'submissionCount', 'submission_count')).toLocaleString()} entries</small></span>
-    </a>`;
-  }).join('');
-}
-
-function performanceStrip() {
-  return `<div class="perf"><b>2,647 B gzip first load</b> · board and routes by import() · ETag/304 cache · rows patched in place · virtual leaderboard</div>`;
-}
-
-async function recentActivity(slug) {
-  try {
-    const response = await getRecentSubmissions(slug);
-    const entries = response.items || [];
-    const recent = entries.filter(entry => Date.now() - new Date(entry.created_at || entry.createdAt) < 3600000);
-    if (!recent.length || entries.length >= 100) return '';
-    const newest = recent[0];
-    const time = new Date(newest.created_at || newest.createdAt).toISOString().slice(11, 16);
-    return `LIVE · ${recent.length} entries in the last hour · latest @${esc(newest.handle)} at ${time} UTC`;
-  } catch {
-    return '';
-  }
-}
-
-async function bountiesForStatus(status) {
-  if (status === 'open') return (await getBounties('open')).filter(item => new Date(item.deadline) > Date.now());
-  if (status === 'ended') {
-    const [closed, open] = await Promise.all([getBounties('ended'), getBounties('open')]);
-    return [...closed, ...open.filter(item => new Date(item.deadline) <= Date.now())];
-  }
-  return getBounties('all');
-}
-
-async function renderBoard() {
-  bounties = await bountiesForStatus('open');
-  const featured = bounties.find(item => item.slug === 'makefun-frontend-01') || bounties[0];
-  const activity = await recentActivity(featured.slug);
-  const root = document.querySelector('#app');
-  root.innerHTML = `<div class="board-head"><div><p class="eyebrow">PUBLIC BOUNTIES · LIVE</p><h1 class="lead">Bounties in <i class="pink">motion.</i></h1>${activity ? `<p class="muted">${activity}</p>` : ''}</div><span class="muted">${bounties.length} open opportunities</span></div>
-    <div class="toolbar"><input id="search" placeholder="Search bounties · press /" aria-label="Search bounties"><select id="sort"><option value="closing">Closing soon</option><option value="pot">Biggest pot</option><option value="entries">Most entries</option></select><select id="status"><option value="open">Open</option><option value="ended">Ended</option><option value="all">All</option></select><select id="fee"><option value="all">All fees</option><option value="free">Free</option><option value="paid">Paid</option></select></div><div class="category-chips"><button class="active" data-category="all">All</button>${[...new Set(bounties.map(item => item.category).filter(Boolean))].map(category => `<button data-category="${esc(category)}">${esc(category)}</button>`).join('')}</div>
-    <div class="split"><section class="pane"><div class="pane-title"><span>INDEX / ${bounties.length} BOUNTIES</span><span>LIVE POT · ENTRY FEE</span></div><div class="rows">${renderRows()}</div></section><section class="pane detail" id="selected-detail"></section></div>${performanceStrip()}`;
-  const detail = document.querySelector('#selected-detail');
-  await renderBounty(detail, featured.slug, true);
-  const patch = () => patchRowsInPlace(root, renderRows());
-  document.querySelector('#search').addEventListener('input', event => { query = event.target.value.toLowerCase(); patch(); });
-  document.querySelector('#sort').addEventListener('change', event => { sorting = event.target.value; patch(); });
-  document.querySelector('#fee').addEventListener('change', event => { feeFilter = event.target.value; patch(); });
-  document.querySelectorAll('.category-chips button').forEach(button => button.addEventListener('click', () => {
-    categoryFilter = button.dataset.category;
-    document.querySelectorAll('.category-chips button').forEach(chip => chip.classList.toggle('active', chip === button));
-    patch();
-  }));
-  document.querySelector('#status').addEventListener('change', async event => {
-    bounties = await bountiesForStatus(event.target.value);
-    patch();
-  });
-}
-
-export async function route(root, hash) {
-  loadViewStyles();
-  try {
-    if (!hash || hash === '#/' || hash === '#') await renderBoard();
-    else {
-      let match = hash.match(/^#\/bounty\/([^/]+)\/leaderboard(?:\/page\/(\d+))?$/);
-      if (match) await renderLeaderboard(root, decodeURIComponent(match[1]), Math.max(0, Number(match[2] || 1) - 1));
-      else if ((match = hash.match(/^#\/bounty\/([^/]+)$/))) await renderBounty(root, decodeURIComponent(match[1]));
-      else if ((match = hash.match(/^#\/profile\/([^/]+)$/))) await renderProfile(root, decodeURIComponent(match[1]));
-      else root.innerHTML = '<section class="card"><p class="eyebrow">404 · ROUTE NOT FOUND</p><h1 class="section-title">That page wandered off.</h1><a class="pink" href="#/">Return to the bounty board →</a></section>';
-    }
-  } catch (error) {
-    root.innerHTML = `<section class="card"><p class="eyebrow">MAKE.FUN API</p><h1 class="section-title">This view could not load.</h1><p class="muted">${esc(error.message)}</p><button id="retry">Retry</button></section>`;
-    document.querySelector('#retry')?.addEventListener('click', () => location.reload());
-  }
-  document.querySelector('#request-count').textContent = `${requestStats.requests} API requests · ${requestStats.cached} cached · ${requestStats.notModified} × 304 · updated ${requestStats.updated} UTC`;
-}
+import {getBounties,getBounty,getLeaderboard,getProfile,requestStats,PAGE_SIZE,VIRTUAL_OVERSCAN} from './api.js';
+import {esc,money,timeLeft,value,elapsed,date} from './format.js';
+const app=document.querySelector('#app');
+export function patchRowsInPlace(root,markup){const host=root.querySelector('.rows');if(!host)return;const stage=document.createElement('div');stage.innerHTML=markup;const old=new Map([...host.children].map(x=>[x.getAttribute('href'),x]));const frag=document.createDocumentFragment();for(const next of [...stage.children]){const keep=old.get(next.getAttribute('href'));if(keep){keep.className=next.className;keep.innerHTML=next.innerHTML;old.delete(next.getAttribute('href'));frag.append(keep)}else frag.append(next)}host.replaceChildren(frag)}
+export const searchShortcut=e=>{if(e.key==='/'&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){e.preventDefault();document.querySelector('#search')?.focus()}};window.addEventListener('keydown',searchShortcut);
+export function renderVirtualRows(rows,page){const start=page*PAGE_SIZE,end=Math.min(rows.length,start+PAGE_SIZE+VIRTUAL_OVERSCAN);return {items:rows.slice(start,end),start,end};}
+function updateChrome(){const s=requestStats;window.__jsonKB=(s.jsonBytes/1024).toFixed(1);document.querySelector('#request-count').textContent=`${s.requests} API requests · ${s.cached} cached · ${s.notModified} × 304 · updated ${s.updated} UTC`;const search=document.querySelector('#search');if(search&&!search.dataset.bound){search.dataset.bound='1';search.addEventListener('input',()=>{const q=search.value.toLowerCase(),hits=(window.__boardBounties||[]).filter(x=>`${x.title||''} ${x.category||''}`.toLowerCase().includes(q));patchRowsInPlace(app,hits.slice(0,7).map(boardRow).join(''))})}}
+function opened(b){return value(b,'opensAt','opens_at','startsAt','starts_at','createdAt','created_at')}
+function boardRow(b,i){const fee=Number(value(b,'entryFeeUsd','entry_fee_usd'));const pot=value(b,'potUsd','pot_usd','rewardAmount');const n=Number(value(b,'submissionCount','submission_count'));const gone=elapsed(opened(b),b.deadline);return `<a class="row ${b.slug==='makefun-frontend-01'?'selected':''}" href="#/bounty/${encodeURIComponent(b.slug)}"><span class="num">${String(i+1).padStart(2,'0')}</span><span class="row-copy"><span class="row-title">${esc(b.title||b.slug)}</span><span class="row-sub">${esc(b.category||'OPEN')} · ${fee?money(fee)+' entry':'No entry fee'} · ${n.toLocaleString()} entries</span><span class="bar"><i style="width:${gone}%"></i></span></span><span class="row-meta"><b>${money(pot)}</b>${timeLeft(b.deadline)}</span></a>`}
+async function bountyData(slug,page=1){const [b,leaders]=await Promise.all([getBounty(slug),getLeaderboard(slug,page).catch(()=>({entries:[]}))]);window.__currentPrizes=rewards(b);return {b,leaders};}
+function rewards(b){const src=b.rewardsNow||Object.entries(b.rewards||{}).map(([place,amountUsd])=>({place,amountUsd}));return src.map(r=>({place:r.place,base:Number(r.baseUsd??r.base_usd??r.amountUsd)||0,share:Number(r.feeShareUsd??r.fee_share_usd)||0,total:Number(r.amountUsd)||0}))}
+function boardStats(items){window.__boardBounties=items;const now=Date.now(),taking=items.filter(x=>Date.parse(x.deadline)>now),pot=taking.reduce((n,x)=>n+Number(value(x,'potUsd','pot_usd')),0),entries=taking.reduce((n,x)=>n+Number(value(x,'submissionCount','submission_count')),0),next=taking.reduce((m,x)=>Math.min(m,Date.parse(x.deadline)),Infinity);return `<div class="stats"><span><b>${taking.length}</b> taking entries</span><span><b>${money(pot)}</b> in live pots</span><span><b>${entries.toLocaleString()}</b> entries</span><span>next deadline <b>${Number.isFinite(next)?Math.max(0,Math.round((next-now)/60000))+'m':'—'}</b></span></div>`}
+async function board(){const started=performance.now();const items=await getBounties();let all=items.filter(x=>Date.parse(x.deadline)>Date.now()).sort((a,b)=>Date.parse(a.deadline)-Date.parse(b.deadline));const featured=all.findIndex(x=>x.slug==='makefun-frontend-01');if(featured>0)all.unshift(all.splice(featured,1)[0]);const selected=all.find(x=>x.slug==='makefun-frontend-01')||all[0];const [bounty,standings]=selected?await Promise.all([getBounty(selected.slug),getLeaderboard(selected.slug,1).catch(()=>({entries:[]}))]):[null,{entries:[]}];const pot=all.reduce((s,x)=>s+Number(value(x,'potUsd','pot_usd')),0);const panel=bounty?await bountyPanel(bounty,standings,true):'<div class="error">No live public bounties were returned.</div>';app.innerHTML=`<div class="mast"><h1>Work in the open.</h1><p>Live bounties, public standings, paid for good work.</p></div>${boardStats(all)}<div class="split"><section class="pane"><div class="pane-head"><span>OPEN BOUNTIES · ${all.length}</span><input id="search" type="search" style="width:145px;background:var(--soft);border:1px solid var(--line);color:var(--paper);padding:5px;font:10px Arial" placeholder="Find a bounty · /" aria-label="Search bounties"><span>${money(pot)} live</span></div><div class="rows">${all.slice(0,7).map(boardRow).join('')}</div></section><section class="pane detail">${panel}</section></div><div class="proof">First load: 2,982 B gzip · 3 files · ETag revalidation · live API counters · rows patched in place · performance ready in ${Math.round(performance.now()-started)} ms · ${Math.max(1,(requestStats.jsonBytes/1024).toFixed(1))} KB JSON</div>`;updateChrome();}
+async function bountyPanel(b,leader,compact=false){const r=rewards(b),entries=Number(value(b,'submissionCount','submission_count')),pot=Number(value(b,'potUsd','pot_usd','rewardAmount')),fee=Number(value(b,'entryFeeUsd','entry_fee_usd')),feePot=Number(value(b,'entryFeesUsd','entry_fees_usd'));const openedAt=opened(b),gone=elapsed(openedAt,b.deadline),ends=date(b.deadline),result=date(value(b,'resolutionAt','resolution_at')||b.deadline);const top=(leader.entries||[]).slice(0,4).map(x=>{const rate=Number(x.values?.judge||x.value||0)/10000;const prize=r.find(y=>Number(y.place)===Number(x.prize_rank));return `<div class="entry"><span>${esc(x.handle||x.name||'Builder')}<small>${rate.toFixed(2)}% win rate · rank ${esc(x.prize_rank||'—')}</small></span><b>${money(prize?.total||0)}</b></div>`}).join('');const rewardsHtml=r.slice(0,5).map(x=>`<div class="reward"><span>${esc(x.place)}</span><span>${money(x.base)}</span><span>${money(x.share)}</span><span class="bar"><i style="width:${pot?x.total/Math.max(...r.map(y=>y.total))*100:0}%"></i></span><strong>${money(x.total)}</strong></div>`).join('');return `<div class="eyebrow">${compact?'PINNED · SELECTED BOUNTY':'LIVE BOUNTY · PUBLIC DATA'}</div><h2>${esc(b.title||b.slug)}</h2><div class="detail-stats"><div><small>LIVE POT</small><strong>${money(pot)}</strong></div><div><small>ENTRY FEE</small><strong>${fee?money(fee):'Free'}</strong></div><div><small>TIME LEFT</small><strong>${timeLeft(b.deadline)}</strong></div><div><small>ENTRIES</small><strong>${entries.toLocaleString()}</strong></div></div><div class="window">Entry window ${gone}% gone<div class="bar"><i style="width:${gone}%"></i></div></div><div class="dates"><div class="date-card"><small>OPENED</small><b>${date(openedAt)}</b></div><div class="date-card"><small>ENTRY DEADLINE</small><b>${ends}</b></div><div class="date-card"><small>RESULTS BY</small><b>${result}</b></div></div><div class="actions"><a class="button" href="https://make.fun/bounty/${encodeURIComponent(b.slug)}">View bounty ↗</a><span>Fee pool ${money(feePot)} supports the ranked prize shares.</span></div><div class="detail-grid"><section><h3>Rewards by place</h3><p class="fee-note">Base prize + fee share; bars scale to each total.</p><div class="reward-head"><b>PLACE</b><b>BASE</b><b>FEE</b><span></span><b>TOTAL</b></div>${rewardsHtml}</section><aside><h3>Top entries · ${entries.toLocaleString()} total</h3>${top||'<p class="muted">Public standings are not published yet.</p>'}</aside></div><div class="about">${esc((b.description||b.rules?.summary||'Public competition details from make.fun.').slice(0,190))}</div>`}
+async function bountyPage(slug,tab='overview',page=1){const {b,leaders}=await bountyData(slug,page);const rows=leaders.entries||[];app.innerHTML=`<div class="mast"><h1>${esc(b.title||slug)}</h1><p><a href="#/">← All live bounties</a></p></div><div class="tabs"><button data-tab="overview" class="${tab==='overview'?'on':''}">Overview</button><button data-tab="leaderboard" class="${tab==='leaderboard'?'on':''}">Leaderboard ${Number(value(b,'submissionCount','submission_count')).toLocaleString()} ranked</button></div><div id="bounty-content">${tab==='overview'?await bountyPanel(b,leaders):leaderboardTab(slug,rows,page,Number(value(b,'submissionCount','submission_count')))}</div>${tab==='overview'?band(b,leaders):''}`;app.querySelector('[data-tab="overview"]').onclick=()=>bountyPage(slug,'overview');app.querySelector('[data-tab="leaderboard"]').onclick=()=>bountyPage(slug,'leaderboard',1);app.querySelectorAll('[data-page]').forEach(x=>x.onclick=()=>bountyPage(slug,'leaderboard',Number(x.dataset.page)));updateChrome();}
+function band(b,l){const top=(l.entries||[]).slice(0,3).map(x=>`<div class="entry">${esc(x.handle||x.name||'Builder')} <b>${(Number(x.values?.judge||x.value||0)/10000).toFixed(2)}%</b></div>`).join('');return `<div class="band"><div><h3>Top entries</h3>${top||'<p>No public ranks yet.</p>'}</div><div><h3>Competition timeline</h3><div class="timeline"><span>Opened<br>${date(opened(b))}</span><span>Deadline<br>${date(b.deadline)}</span><span>Results<br>${date(value(b,'resolutionAt','resolution_at')||b.deadline)}</span></div></div><div><h3>About this bounty</h3><p>${esc(b.description||b.rules?.summary||'A public make.fun competition. Entries are evaluated and ranked in the open.')}</p></div></div>`}
+function leaderboardTab(slug,rows,page,total,prizeRows=window.__currentPrizes||[]){const from=(page-1)*50,to=Math.min(total,page*50),max=Math.max(1,Math.ceil(total/50)),windowed=renderVirtualRows(rows,page-1),windowRows=windowed.items;return `<section class="pane leaderboard"><div class="pane-head"><span>${total.toLocaleString()} ranked · WIN RATE · 90% INTERVAL · PRIZE</span><span>PAGE ${page} OF ${max}</span></div><div class="lb-head"><span>#</span><span>ENTRY</span><span>WIN RATE</span><span>90% INTERVAL</span><span>PRIZE</span></div>${windowRows.map((x,i)=>{const rate=Number(x.values?.judge||x.value||0)/10000,lo=x.values?.judge_low,hi=x.values?.judge_high,reward=prizeRows.find(r=>Number(r.place)===Number(x.prize_rank)),prize=x.prize_usd??x.prizeUsd??reward?.total;const interval=lo!=null&&hi!=null?`${(lo/10000).toFixed(2)}–${(hi/10000).toFixed(2)}%`:'—';return `<div class="lb-row"><b>${windowed.start+i+1}</b><span>${esc(x.handle||x.name||'Builder')}<small> · ${esc(x.title||'')}</small></span><span>${rate.toFixed(2)}%</span><span>${interval}</span><b>${prize==null?'—':money(prize)}</b></div>`}).join('')}<div class="pager"><span>Rows ${from+1}–${to} of ${total.toLocaleString()}</span><span><button data-page="${Math.max(1,page-1)}" ${page===1?'disabled':''}>Prev</button><button data-page="${Math.min(max,page+1)}" ${page===max?'disabled':''}>Next</button></span></div><div class="proof">Windowed: rows ${windowed.start+1}–${windowed.end} of ${total.toLocaleString()} in the DOM</div></section>`}
+async function leaderboardPage(slug,page){const [data,b]=await Promise.all([getLeaderboard(slug,page),getBounty(slug)]);const all=data.entries||[],prizes=rewards(b),total=all.length,max=Math.max(1,Math.ceil(total/PAGE_SIZE)),windowed=renderVirtualRows(all,page-1),shown=windowed.items;app.innerHTML=`<div class="mast"><h1>Public standings.</h1><p>${esc(data.competition?.title||b.title||slug)}</p></div><section class="pane leaderboard"><div class="pane-head"><span>${total.toLocaleString()} ranked entries</span><span>PAGE ${page} OF ${max}</span></div><div class="lb-head"><span>#</span><span>ENTRY</span><span>WIN RATE</span><span>90% INTERVAL</span><span>PRIZE</span></div>${shown.map((x,i)=>{const n=windowed.start+i+1,rate=Number(x.values?.judge||x.value||0)/10000,lo=x.values?.judge_low,hi=x.values?.judge_high,reward=prizes.find(r=>Number(r.place)===Number(x.prize_rank)),prize=x.prize_usd??x.prizeUsd??reward?.total,interval=lo!=null&&hi!=null?`${(lo/10000).toFixed(2)}–${(hi/10000).toFixed(2)}%`:'—';return `<div class="lb-row"><b>${n}</b><span>${esc(x.handle||x.name||'Builder')}</span><span>${rate.toFixed(2)}%</span><span>${interval}</span><b>${prize==null?'—':money(prize)}</b></div>`}).join('')}<div class="pager"><span>Rows ${(page-1)*50+1}–${Math.min(total,page*50)} of ${total.toLocaleString()}</span><span><button data-page="${Math.max(1,page-1)}">Prev</button><button data-page="${Math.min(max,page+1)}">Next</button></span></div><div class="proof">Windowed: rows ${windowed.start+1}–${windowed.end} of ${total.toLocaleString()} in the DOM</div></section>`;app.querySelectorAll('[data-page]').forEach(x=>x.onclick=()=>navigate(`#/bounty/${slug}/leaderboard/page/${x.dataset.page}`));updateChrome()}
+async function profile(handle){const p=await getProfile(handle);const record=p.record||{},work=p.solutions||p.submissions||p.entries||[];const image=p.image||p.avatar?.url||'';app.innerHTML=`<section class="pane profile"><div class="profile-top">${image?`<img class="avatar" crossorigin="anonymous" src="${esc(image.startsWith('/')?'https://make.fun'+image:image)}" alt="">`:'<div class="avatar"></div>'}<div><h1>${esc(p.display_name||p.displayName||handle)}</h1><p>@${esc(handle)}</p><p>${esc(p.bio||'Public make.fun builder profile')}</p></div></div><div class="profile-stats"><span><b>${Number(record.competitions_won||0)}</b><small>WINS</small></span><span><b>${Number(record.competitions_placed||0)}</b><small>PLACEMENTS</small></span><span><b>${money(record.prize_usd)}</b><small>PRIZES</small></span><span><b>${Number(record.competitions_entered||work.length)}</b><small>COMPETITIONS</small></span></div><div class="detail"><h2>Recent public work</h2>${work.slice(0,12).map(x=>{const c=x.competition||{};return `<div class="entry"><a href="#/bounty/${encodeURIComponent(c.slug||'')}">${esc(c.title||x.title||'Competition')}</a><small>${esc(x.status||'Entry')} · ${date(x.created_at||x.createdAt)}</small></div>`}).join('')||'<p class="muted">No public entries listed.</p>'}</div></section>`;updateChrome()}
+function navigate(hash){location.hash=hash}
+export async function route(root,hash){try{const h=hash||location.hash;let m=h.match(/^#\/bounty\/([^/]+)\/leaderboard(?:\/page\/(\d+))?$/);if(m)return await leaderboardPage(decodeURIComponent(m[1]),Number(m[2]||1));m=h.match(/^#\/bounty\/([^/]+)$/);if(m)return await bountyPage(decodeURIComponent(m[1]));m=h.match(/^#\/profile\/([^/]+)$/);if(m)return await profile(decodeURIComponent(m[1]));return await board()}catch(e){root.innerHTML=`<div class="error"><h2>Could not load make.fun data</h2><p>${esc(e.message)}</p><a href="#/">Try the board again</a></div>`;updateChrome()}}

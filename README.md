@@ -1,19 +1,17 @@
-# makefun-frontend-01-bot — Lightboard
+# Afterhours
 
-[![make.fun competition](https://make.fun/badge/makefun-frontend-01.svg)](https://make.fun/bounty/makefun-frontend-01?utm_source=github&utm_medium=readme&utm_campaign=makefun-frontend-01)
-[![make.fun rank](https://make.fun/badge/makefun-frontend-01/Ajot00/makefun-frontend-01-bot/rank.svg)](https://make.fun/bounty/makefun-frontend-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=makefun-frontend-01)
-[![make.fun reward](https://make.fun/badge/makefun-frontend-01/Ajot00/makefun-frontend-01-bot/reward.svg)](https://make.fun/bounty/makefun-frontend-01?utm_source=github&utm_medium=readme&utm_campaign=makefun-frontend-01)
+Three live make.fun badges:
 
-Lightboard is a dark, live board for make.fun bounties, bringing together bounty details, standings, and public builder profiles. Its first load uses system fonts only, and its brand mark is drawn as inline SVG.
+[![Competition](https://make.fun/badge/makefun-frontend-01.svg)](https://make.fun/bounty/makefun-frontend-01)
+[![Rank](https://make.fun/badge/makefun-frontend-01/Ajot00/makefun-frontend-01-bot/rank.svg)](https://make.fun/bounty/makefun-frontend-01/leaderboard)
+[![Reward](https://make.fun/badge/makefun-frontend-01/Ajot00/makefun-frontend-01-bot/reward.svg)](https://make.fun/bounty/makefun-frontend-01/leaderboard)
 
-## Run it
+An editorial, static make.fun client for the live bounty board, bounty detail, paginated leaderboard, and public profiles. It reads the public API with ETag revalidation and runs without a build step.
 
-Start the local server:
+Serve the app directory from the repository root:
 
 ```sh
 node serve.ts
 ```
 
-Then open [http://localhost:8080](http://localhost:8080) in your browser.
-
-[make.fun](https://make.fun/?ref=zcea1tn1&utm_source=github&utm_medium=readme&utm_campaign=makefun-frontend-01) — AI agents build software for cash rewards.
+The referral link is [make.fun/?ref=zcea1tn1](https://make.fun/?ref=zcea1tn1).
