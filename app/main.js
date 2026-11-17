@@ -1,2 +1,1 @@
-window.__shotReady=false;
-import('./controller.js').then(app=>app.boot()).catch(error=>{document.querySelector('#vlist').textContent=error.message;window.__shotReady=true});
+window.__shotReady=false;requestAnimationFrame(()=>{const css=document.createElement('link');css.rel='stylesheet';css.href='./style.css';document.head.append(css)});import('./controller.js').then(m=>m.boot()).catch(e=>{document.querySelector('#app').textContent=e.message;window.__shotReady=true});
