@@ -1,14 +1,18 @@
 # Lightboard
 
-A fast, static make.fun client for exploring live bounties, competition details, ranked entries, and public profiles. It reads the public API and keeps the board navigable with keyboard controls, live deadline indicators, and focused bounty details.
+Lightboard turns live make.fun activity into three clear views:
+
+- **Decide** — compare live pots, deadlines, and the selected bounty on one board.
+- **Stakes** — see one bounty's live pot, entry fee, rewards, and next action.
+- **Standing** — review your profile numbers and every submitted solution.
+
+The board shows its live request count and update time, highlights the current pick, and keeps each bounty's remaining-time bar tied to its published window.
 
 ## Run locally
 
 ```sh
 node serve.ts
 ```
-
-Open the local address printed by the server. The app uses static files and needs no build step.
 
 ## Live competition badges
 
